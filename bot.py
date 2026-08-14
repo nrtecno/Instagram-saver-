@@ -1,4 +1,4 @@
-import os, time, glob, json, threading
+import os, time, glob, threading
 import yt_dlp
 import telebot
 from flask import Flask, request
@@ -15,21 +15,7 @@ except:
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 CHANNEL_USERNAME = "@nrtecno2"
 CHANNEL_LINK = "https://t.me/nrtecno2"
-USERS_FILE = "total_users.json"
 app = Flask(__name__)
-
-def load_users():
-    if not os.path.exists(USERS_FILE): return []
-    try:
-        with open(USERS_FILE, 'r') as f: return json.load(f)
-    except: return []
-def save_user(user_id):
-    users = load_users()
-    if user_id not in users:
-        users.append(user_id)
-        with open(USERS_FILE, 'w') as f: json.dump(users, f)
-    return len(users)
-def get_total_users(): return len(load_users())
 
 def auto_cleanup():
     while True:
@@ -40,55 +26,39 @@ def auto_cleanup():
             except: pass
 threading.Thread(target=auto_cleanup, daemon=True).start()
 
-# --- STRICT CHECK ---
 def is_user_joined(user_id):
     try:
         member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        print(f"Membership check failed (Bot is not admin?): {e}")
-        # Agar bot admin nahi hai to ab FALSE ayega, matlab sab block honge
-        return False
+    except:
+        return False # Bot admin nahi hai to block karega
 
-@bot.message_handler(commands=['start', 'stats'])
+@bot.message_handler(commands=['start'])
 def start_handler(message):
-    user_id = message.from_user.id
-    total = save_user(user_id)
-    if message.text.startswith("/stats"):
-        if ADMIN_ID is None or user_id!= ADMIN_ID:
-            bot.send_message(message.chat.id, "❌ Admin only.")
-            return
-        bot.send_message(message.chat.id, f"📊 Total Users: {total} 🚀", parse_mode="Markdown")
-        return
-
-    if not is_user_joined(user_id):
+    if not is_user_joined(message.from_user.id):
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("💎 Join Channel First 💎", url=CHANNEL_LINK))
+        markup.add(types.InlineKeyboardButton("💎 Join Our Channel 💎", url=CHANNEL_LINK))
         markup.add(types.InlineKeyboardButton("✅ I Joined - Check Now 🔥", callback_data="check_join"))
-        bot.send_message(message.chat.id, f"⚠️ **Access Denied**\n\nYou must join {CHANNEL_USERNAME} to use this bot.\n\n👥 Total Users: {total}", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"👋 Welcome to INSTAGRAM DOWNLOADER BOT\n\n⚠️ To use bot, you must join {CHANNEL_USERNAME}\n\nJoin and click Check button.", reply_markup=markup)
     else:
-        bot.send_message(message.chat.id, f"👋 Welcome!\n\n👥 Total Users: {total}\n\n📩 Send Instagram link.", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"👋 Welcome Back!\n\n✅ You are our channel member.\n\n📩 Send me any Instagram link and I will download it.")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    if call.data!= "check_join": return
-    total = save_user(call.from_user.id)
     if is_user_joined(call.from_user.id):
-        bot.edit_message_text(f"✅ Thanks for joining!\n👥 Total: {total}\n📩 Send link now.", call.message.chat.id, call.message.message_id)
+        bot.edit_message_text("✅ Thanks for joining!\n\n📩 Now send any Instagram link.", call.message.chat.id, call.message.message_id)
     else:
-        bot.answer_callback_query(call.id, "❌ You haven't joined yet! Join and try again.", show_alert=True)
+        bot.answer_callback_query(call.id, "❌ You haven't joined yet! Join first.", show_alert=True)
 
 @bot.message_handler(func=lambda m: True)
 def handle_link(message):
     if "instagram.com" not in message.text: return
-    total = save_user(message.from_user.id)
 
-    # --- YAHI STRICT BLOCK HAI ---
     if not is_user_joined(message.from_user.id):
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("💎 Join Channel to Unlock Bot 💎", url=CHANNEL_LINK))
-        bot.send_message(message.chat.id, f"🚫 **Bot Locked**\n\nYou have not joined {CHANNEL_USERNAME}.\nJoin first to download.\n\n👥 Total: {total}", reply_markup=markup, parse_mode="Markdown")
-        return # <-- Yahan se aage bot kaam hi nahi karega
+        bot.send_message(message.chat.id, f"🚫 Bot Locked\n\nYou must join {CHANNEL_USERNAME} first.", reply_markup=markup)
+        return
 
     url = message.text.strip()
     msg = bot.send_message(message.chat.id, "⏳ Downloading...")
@@ -97,17 +67,18 @@ def handle_link(message):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
-        caption = f"✅ Done\n👥 Total: {total}\nJoin: {CHANNEL_USERNAME}"
+        caption = f"✅ Downloaded\n🔗 Join: {CHANNEL_USERNAME}\n🤖 Bot: @{bot.get_me().username}"
         with open(filename, 'rb') as f:
             if filename.endswith(('.mp4','.mkv','.mov','.webm')): bot.send_video(message.chat.id, f, caption=caption)
             else: bot.send_photo(message.chat.id, f, caption=caption)
         if os.path.exists(filename): os.remove(filename)
         bot.delete_message(message.chat.id, msg.message_id)
     except Exception as e:
-        bot.edit_message_text(f"❌ Failed. Private link?", message.chat.id, msg.message_id)
+        print(e)
+        bot.edit_message_text("❌ Failed to download. Private post?", message.chat.id, msg.message_id)
 
 @app.route('/')
-def home(): return f"Bot Alive! Total: {get_total_users()}"
+def home(): return "Bot is Alive!"
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     update = types.Update.de_json(request.get_data().decode('utf-8'))
