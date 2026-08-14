@@ -12,21 +12,20 @@ bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 CHANNEL_USERNAME = "@nrtecno2"
 CHANNEL_LINK = "https://t.me/nrtecno2"
-WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL") # Render khud ye de dega
+WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 app = Flask(__name__)
 
-# --- Auto Cleanup every 3 min ---
+bot_data = {} # Isse upar define karna jaruri tha
+
 def auto_cleanup():
     while True:
         time.sleep(180)
-        print("Cleaning storage...")
-        files = glob.glob("*.mp4") + glob.glob("*.jpg") + glob.glob("*.mkv") + glob.glob("*.webm") + glob.glob("*.m4a") + glob.glob("*.webp")
+        files = glob.glob("*.mp4") + glob.glob("*.jpg") + glob.glob("*.mkv") + glob.glob("*.webm")
         for f in files:
             try:
                 if os.path.exists(f) and (time.time() - os.path.getctime(f) > 180):
                     os.remove(f)
-                    print(f"Deleted: {f}")
             except: pass
 threading.Thread(target=auto_cleanup, daemon=True).start()
 
@@ -37,7 +36,6 @@ def is_user_joined(user_id):
     except:
         return True
 
-# --- Handlers ---
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     if not is_user_joined(message.from_user.id):
@@ -63,29 +61,36 @@ def callback_handler(call):
         return
 
     quality = call.data.split("_")[1]
-    bot.edit_message_text(f"⏳ Downloading in {quality}...", call.message.chat.id, call.message.message_id)
+    bot.edit_message_text(f"⏳ Downloading in {quality}... Please wait", call.message.chat.id, call.message.message_id)
 
-    format_map = {"360": "best[height<=360]", "480": "best[height<=480]", "720": "best[height<=720]", "1080": "best[height<=1080]", "best": "best"}
-
-    ydl_opts = {'format': format_map.get(quality, 'best'), 'outtmpl': '%(id)s.%(ext)s', 'quiet': True}
+    # --- YAHAN FIX KIYA HAI ---
+    # Instagram ke liye format hamesha 'best' hi rahega, quality ka koi fark nahi
+    ydl_opts = {
+        'format': 'best',
+        'outtmpl': '%(id)s.%(ext)s',
+        'quiet': True,
+        'no_warnings': True,
+    }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
 
-        caption = f"✅ {quality} Quality\nJoin: {CHANNEL_USERNAME}"
+        caption = f"✅ Downloaded in best quality\nJoin: {CHANNEL_USERNAME}"
         with open(filename, 'rb') as f:
-            if filename.endswith(('.mp4','.mkv','.mov')):
+            if filename.endswith(('.mp4','.mkv','.mov','.webm')):
                 bot.send_video(call.message.chat.id, f, caption=caption)
             else:
                 bot.send_photo(call.message.chat.id, f, caption=caption)
-        os.remove(filename)
+
+        if os.path.exists(filename):
+            os.remove(filename)
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except Exception as e:
+        print(f"Error: {e}")
         bot.send_message(call.message.chat.id, f"❌ Failed: {e}")
 
-bot_data = {}
 @bot.message_handler(func=lambda m: True)
 def handle_link(message):
     if "instagram.com" not in message.text:
@@ -109,10 +114,8 @@ def handle_link(message):
     )
     bot.send_message(message.chat.id, "👇 Select Quality:", reply_markup=markup)
 
-# --- Webhook Routes ---
 @app.route('/')
-def home():
-    return "Bot is Alive! - Webhook Mode"
+def home(): return "Bot is Alive! - Webhook Mode"
 
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
@@ -121,19 +124,14 @@ def webhook():
         update = types.Update.de_json(json_string)
         bot.process_new_updates([update])
         return ''
-    else:
-        return 'OK', 403
+    else: return 'OK', 403
 
 if __name__ == "__main__":
     bot.remove_webhook()
     time.sleep(1)
-    # Render automatically provides RENDER_EXTERNAL_URL like https://your-app.onrender.com
     if WEBHOOK_URL:
         full_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
         bot.set_webhook(url=full_url)
         print(f"Webhook set to: {full_url}")
-    else:
-        print("RENDER_EXTERNAL_URL not found, set webhook manually")
-
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
