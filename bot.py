@@ -4,7 +4,7 @@ import glob
 import logging
 import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 # --- CONFIG ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -26,7 +26,7 @@ async def is_user_joined(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 2. Auto-Delete Job - Runs every 3 minutes
 async def auto_cleanup(context: ContextTypes.DEFAULT_TYPE):
     print("Cleaning storage...")
-    files = glob.glob("*.mp4") + glob.glob("*.jpg") + glob.glob("*.mkv") + glob.glob("*.webm") + glob.glob("*.mp3") + glob.glob("*.m4a")
+    files = glob.glob("*.mp4") + glob.glob("*.jpg") + glob.glob("*.mkv") + glob.glob("*.webm") + glob.glob("*.mp3") + glob.glob("*.m4a") + glob.glob("*.webp")
     for f in files:
         try:
             if os.path.exists(f) and (time.time() - os.path.getctime(f) > 180):
