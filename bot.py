@@ -1,4 +1,4 @@
-import os, time, glob, threading, json
+import os, time, glob, threading
 import yt_dlp
 import telebot
 from flask import Flask, request
@@ -6,7 +6,8 @@ from telebot import types
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL")
-bot = telebot.TeleBot(BOT_TOKEN, threaded=True) # Threaded True kiya - ab atake ga nahi
+
+bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 CHANNEL_USERNAME = "@nrtecno2"
 CHANNEL_LINK = "https://t.me/nrtecno2"
 app = Flask(__name__)
@@ -19,46 +20,85 @@ def is_user_joined(user_id):
     except: return False
 
 def get_ydl_opts(quality):
-    # Base opts - Instagram ke liye special header
-    base = {
+    # --- WITHOUT COOKIES BYPASS ---
+    opts = {
         'quiet': True,
         'no_warnings': True,
         'outtmpl': '%(id)s.%(ext)s',
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'extractor_args': {'instagram': {'api_version': 'v1'}},
+        'merge_output_format': 'mp4',
+        # Ye 3 line hi YouTube bot check ko bypass karti hai
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios'],
+                'player_skip': ['webpage', 'configs', 'js'],
+            }
+        },
+        # Android ka User-Agent
+        'user_agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 11) gzip',
     }
-    if quality == "yt_360": base['format'] = "bestvideo[height<=360][ext=mp4]+bestaudio/best[height<=360]"
-    elif quality == "yt_720": base['format'] = "bestvideo[height<=720][ext=mp4]+bestaudio/best[height<=720]"
-    elif quality == "yt_1080": base['format'] = "bestvideo[height<=1080][ext=mp4]+bestaudio/best[height<=1080]"
+
+    if quality == "yt_360":
+        opts['format'] = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]/best"
+    elif quality == "yt_720":
+        opts['format'] = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]/best"
+    elif quality == "yt_1080":
+        opts['format'] = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]/best"
     elif quality == "yt_mp3":
-        base['format'] = "bestaudio/best"
-        base['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}]
-    else: base['format'] = "bestvideo[ext=mp4]+bestaudio/best/best"
-    base['merge_output_format'] = 'mp4'
-    return base
+        opts['format'] = "bestaudio/best"
+        opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}]
+    else:
+        opts['format'] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best/best"
+
+    return opts
 
 def do_download(chat_id, url, quality, status_id):
     try:
+        # Pehle android client se try
         opts = get_ydl_opts(quality)
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
             if quality == "yt_mp3":
                 base = os.path.splitext(filename)[0]
-                if os.path.exists(base+".mp3"): filename = base+".mp3"
+                if os.path.exists(base + ".mp3"):
+                    filename = base + ".mp3"
+                elif os.path.exists(base + ".m4a"):
+                    filename = base + ".m4a"
 
-        cap = f"✅ Downloaded\nQuality: {quality}\nJoin: {CHANNEL_USERNAME}"
+        cap = f"✅ Downloaded | Quality: {quality}\n🔗 Join: {CHANNEL_USERNAME}"
         with open(filename, 'rb') as f:
             if filename.endswith(('.mp3','m4a')): bot.send_audio(chat_id, f, caption=cap)
-            elif filename.endswith(('.mp4','.mkv','.mov')): bot.send_video(chat_id, f, caption=cap, supports_streaming=True)
+            elif filename.endswith(('.mp4','.mkv','.mov','.webm')): bot.send_video(chat_id, f, caption=cap, supports_streaming=True)
             else: bot.send_document(chat_id, f, caption=cap)
+
         if os.path.exists(filename): os.remove(filename)
         try: bot.delete_message(chat_id, status_id)
         except: pass
+
     except Exception as e:
         print(f"DL Error: {e}")
-        try: bot.edit_message_text(f"❌ Failed: {str(e)[:150]}\n\nInsta private hai to nahi hoga. YT ke liye dusri quality try karo.", chat_id, status_id)
-        except: bot.send_message(chat_id, "❌ Download failed.")
+        # Agar ek client fail ho to dusre se try karo
+        if "Sign in to confirm" in str(e):
+            try:
+                bot.edit_message_text("🔄 YouTube ne block kiya, dusre server se try kar raha hu...", chat_id, status_id)
+                # Second try with iOS client only
+                opts = get_ydl_opts(quality)
+                opts['extractor_args']['youtube']['player_client'] = ['ios']
+                opts['user_agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X)'
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    filename = ydl.prepare_filename(info)
+                cap = f"✅ Downloaded\nJoin: {CHANNEL_USERNAME}"
+                with open(filename, 'rb') as f:
+                    bot.send_video(chat_id, f, caption=cap, supports_streaming=True)
+                if os.path.exists(filename): os.remove(filename)
+                bot.delete_message(chat_id, status_id)
+                return
+            except Exception as e2:
+                print(f"Second try failed: {e2}")
+
+        try: bot.edit_message_text(f"❌ Failed: {str(e)[:200]}", chat_id, status_id)
+        except: bot.send_message(chat_id, "❌ Download failed. Thodi der baad try karo.")
 
 @bot.message_handler(commands=['start'])
 def start_h(m):
@@ -66,24 +106,23 @@ def start_h(m):
         mk = types.InlineKeyboardMarkup()
         mk.add(types.InlineKeyboardButton("💎 Join Channel 💎", url=CHANNEL_LINK))
         mk.add(types.InlineKeyboardButton("✅ Check Now", callback_data="check_join"))
-        bot.send_message(m.chat.id, f"Join {CHANNEL_USERNAME} to use bot.", reply_markup=mk)
+        bot.send_message(m.chat.id, f"👋 **ALL-IN-ONE DOWNLOADER**\n\nJoin {CHANNEL_USERNAME} to use bot.\n\nSupported: YouTube, Insta, FB, X", reply_markup=mk, parse_mode="Markdown")
     else:
-        bot.send_message(m.chat.id, "👋 Ready!\nSend Insta / YT / FB / X link.")
+        bot.send_message(m.chat.id, "👋 Ready! Send any YouTube / Insta / FB / X link.")
 
 @bot.callback_query_handler(func=lambda c: True)
 def cb_h(call):
     if call.data == "check_join":
-        if is_user_joined(call.from_user.id): bot.edit_message_text("✅ Joined! Now send link.", call.message.chat.id, call.message.message_id)
+        if is_user_joined(call.from_user.id): bot.edit_message_text("✅ Joined! Send link now.", call.message.chat.id, call.message.message_id)
         else: bot.answer_callback_query(call.id, "❌ Join first!", show_alert=True)
         return
-
     if call.data.startswith("yt_"):
         url = user_links.get(call.from_user.id)
         if not url:
-            bot.answer_callback_query(call.id, "Link expired, send again.")
+            bot.answer_callback_query(call.id, "Link expired!")
             return
-        bot.answer_callback_query(call.id, f"Downloading {call.data}...")
-        bot.edit_message_text(f"⏳ Downloading {call.data}... wait.", call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id, f"Downloading {call.data}")
+        bot.edit_message_text(f"⏳ Downloading {call.data}...", call.message.chat.id, call.message.message_id)
         threading.Thread(target=do_download, args=(call.message.chat.id, url, call.data, call.message.message_id)).start()
 
 @bot.message_handler(func=lambda m: True)
@@ -95,7 +134,6 @@ def link_h(message):
         mk.add(types.InlineKeyboardButton("💎 Join Channel 💎", url=CHANNEL_LINK))
         bot.send_message(message.chat.id, "🚫 Join channel first.", reply_markup=mk)
         return
-
     if "youtu" in txt:
         user_links[message.from_user.id] = txt
         mk = types.InlineKeyboardMarkup(row_width=2)
@@ -104,11 +142,11 @@ def link_h(message):
                types.InlineKeyboardButton("MP3 Audio", callback_data="yt_mp3"))
         bot.send_message(message.chat.id, "🎬 YouTube Detected - Select Quality:", reply_markup=mk)
     else:
-        status = bot.send_message(message.chat.id, "⏳ Downloading... Please wait")
+        status = bot.send_message(message.chat.id, "⏳ Downloading...")
         threading.Thread(target=do_download, args=(message.chat.id, txt, "yt_best", status.message_id)).start()
 
 @app.route('/')
-def home(): return "Bot Alive"
+def home(): return "Bot Alive - No Cookies Mode"
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     update = types.Update.de_json(request.get_data().decode('utf-8'))
