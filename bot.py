@@ -33,16 +33,16 @@ def get_ydl_opts(quality):
         opts['cookiefile'] = 'cookies.txt'
 
     if quality == "yt_360":
-        opts['format'] = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360][ext=mp4]/best"
+        opts['format'] = "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
     elif quality == "yt_720":
-        opts['format'] = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best"
+        opts['format'] = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
     elif quality == "yt_1080":
-        opts['format'] = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best"
+        opts['format'] = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
     elif quality == "yt_mp3":
         opts['format'] = "bestaudio/best"
         opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]
-    else: # Best
-        opts['format'] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+    else:
+        opts['format'] = "bv*+ba/b"
 
     return opts
 
@@ -54,13 +54,14 @@ def do_download(chat_id, url, quality, status_id):
             filename = ydl.prepare_filename(info)
             if quality == "yt_mp3":
                 base = os.path.splitext(filename)[0]
-                # check for mp3 file
-                for ext in [".mp3", ".m4a", ".webm"]:
-                    if os.path.exists(base + ext):
-                        filename = base + ext
-                        if ext!= ".mp3" and os.path.exists(base + ".mp3"):
-                             filename = base + ".mp3"
-                        break
+                if os.path.exists(base + ".mp3"):
+                    filename = base + ".mp3"
+                else:
+                    # find any audio file
+                    for f in glob.glob(base + ".*"):
+                        if f.endswith(('.mp3','.m4a','.webm')):
+                            filename = f
+                            break
 
         caption = f"✅ Downloaded\nJoin {CHANNEL_USERNAME}"
         with open(filename, 'rb') as f:
@@ -80,9 +81,6 @@ def do_download(chat_id, url, quality, status_id):
             bot.edit_message_text(f"❌ Failed: {e}", chat_id, status_id)
         except:
             bot.send_message(chat_id, f"❌ Failed: {e}")
-        if filename and os.path.exists(filename):
-            try: os.remove(filename)
-            except: pass
 
 @bot.message_handler(commands=['start'])
 def start_h(m):
