@@ -1,149 +1,139 @@
 import os
 import time
 import glob
-import logging
+import threading
 import yt_dlp
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+import telebot
+from flask import Flask, request
+from telebot import types
 
-# --- CONFIG ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
+
 CHANNEL_USERNAME = "@nrtecno2"
 CHANNEL_LINK = "https://t.me/nrtecno2"
+WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL") # Render khud ye de dega
 
-logging.basicConfig(level=logging.INFO)
+app = Flask(__name__)
 
-# 1. Check if user joined channel
-async def is_user_joined(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+# --- Auto Cleanup every 3 min ---
+def auto_cleanup():
+    while True:
+        time.sleep(180)
+        print("Cleaning storage...")
+        files = glob.glob("*.mp4") + glob.glob("*.jpg") + glob.glob("*.mkv") + glob.glob("*.webm") + glob.glob("*.m4a") + glob.glob("*.webp")
+        for f in files:
+            try:
+                if os.path.exists(f) and (time.time() - os.path.getctime(f) > 180):
+                    os.remove(f)
+                    print(f"Deleted: {f}")
+            except: pass
+threading.Thread(target=auto_cleanup, daemon=True).start()
+
+def is_user_joined(user_id):
     try:
-        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        print(f"Join check error: {e}")
+    except:
         return True
 
-# 2. Auto-Delete Job - Runs every 3 minutes
-async def auto_cleanup(context: ContextTypes.DEFAULT_TYPE):
-    print("Cleaning storage...")
-    files = glob.glob("*.mp4") + glob.glob("*.jpg") + glob.glob("*.mkv") + glob.glob("*.webm") + glob.glob("*.mp3") + glob.glob("*.m4a") + glob.glob("*.webp")
-    for f in files:
-        try:
-            if os.path.exists(f) and (time.time() - os.path.getctime(f) > 180):
-                os.remove(f)
-                print(f"Deleted: {f}")
-        except Exception as e:
-            print(f"Error deleting {f}: {e}")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_user_joined(update, context):
-        keyboard = [
-            [InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)],
-            [InlineKeyboardButton("✅ I Joined - Check", callback_data="check_join")]
-        ]
-        await update.message.reply_text(
-            f"⚠️ To use this bot, you must join our channel {CHANNEL_USERNAME} first.\n\nAfter joining, click on 'I Joined - Check'.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+# --- Handlers ---
+@bot.message_handler(commands=['start'])
+def start_cmd(message):
+    if not is_user_joined(message.from_user.id):
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK))
+        markup.add(types.InlineKeyboardButton("✅ I Joined - Check", callback_data="check_join"))
+        bot.send_message(message.chat.id, f"⚠️ To use this bot, you must join {CHANNEL_USERNAME} first.", reply_markup=markup)
         return
-    await update.message.reply_text(
-        "👋 Welcome!\n\nSend me any Instagram Reels / Posts / Stories link and I will download it for you in your desired quality."
-    )
+    bot.send_message(message.chat.id, "👋 Welcome!\nSend me any Instagram link.")
 
-async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_user_joined(update, context):
-        keyboard = [[InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)]]
-        await update.message.reply_text(f"Please join {CHANNEL_USERNAME} first to use the bot.", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-
-    url = update.message.text.strip()
-    if "instagram.com" not in url:
-        await update.message.reply_text("Please send a valid Instagram link.")
-        return
-
-    context.user_data['last_url'] = url
-
-    keyboard = [
-        [InlineKeyboardButton("Low - 360p", callback_data="q_360"), InlineKeyboardButton("Medium - 480p", callback_data="q_480")],
-        [InlineKeyboardButton("HD - 720p", callback_data="q_720"), InlineKeyboardButton("Full HD - 1080p", callback_data="q_1080")],
-        [InlineKeyboardButton("Best Quality - 8K/4K", callback_data="q_best")]
-    ]
-    await update.message.reply_text("👇 Select download quality:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def quality_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "check_join":
-        if await is_user_joined(update, context):
-            await query.edit_message_text("✅ Thank you for joining! Now you can send me any Instagram link.")
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    if call.data == "check_join":
+        if is_user_joined(call.from_user.id):
+            bot.edit_message_text("✅ Thanks for joining! Now send me any Instagram link.", call.message.chat.id, call.message.message_id)
         else:
-            await query.answer("❌ You haven't joined yet! Please join first.", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ You haven't joined yet!", show_alert=True)
         return
 
-    url = context.user_data.get('last_url')
+    url = bot_data.get(call.from_user.id)
     if not url:
-        await query.edit_message_text("Link expired. Please send the link again.")
+        bot.edit_message_text("Link expired. Send again.", call.message.chat.id, call.message.message_id)
         return
 
-    quality = query.data.split("_")[1]
-    await query.edit_message_text(f"⏳ Downloading in {quality} quality, please wait...")
+    quality = call.data.split("_")[1]
+    bot.edit_message_text(f"⏳ Downloading in {quality}...", call.message.chat.id, call.message.message_id)
 
-    format_map = {
-        "360": "best[height<=360]",
-        "480": "best[height<=480]",
-        "720": "best[height<=720]",
-        "1080": "best[height<=1080]",
-        "best": "best"
-    }
+    format_map = {"360": "best[height<=360]", "480": "best[height<=480]", "720": "best[height<=720]", "1080": "best[height<=1080]", "best": "best"}
 
-    ydl_opts = {
-        'format': format_map.get(quality, 'best'),
-        'outtmpl': '%(id)s.%(ext)s',
-        'quiet': True,
-        'no_warnings': True,
-    }
+    ydl_opts = {'format': format_map.get(quality, 'best'), 'outtmpl': '%(id)s.%(ext)s', 'quiet': True}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
 
-        caption = f"✅ Downloaded in {quality} quality\nBot by @{context.bot.username}\nJoin: {CHANNEL_USERNAME}"
-        if filename.endswith(('.mp4','.mkv','.mov','.webm')):
-            await context.bot.send_video(chat_id=query.message.chat_id, video=open(filename, 'rb'), caption=caption)
-        else:
-            await context.bot.send_photo(chat_id=query.message.chat_id, photo=open(filename, 'rb'), caption=caption)
-
-        if os.path.exists(filename):
-            os.remove(filename)
-        await query.delete()
-
+        caption = f"✅ {quality} Quality\nJoin: {CHANNEL_USERNAME}"
+        with open(filename, 'rb') as f:
+            if filename.endswith(('.mp4','.mkv','.mov')):
+                bot.send_video(call.message.chat.id, f, caption=caption)
+            else:
+                bot.send_photo(call.message.chat.id, f, caption=caption)
+        os.remove(filename)
+        bot.delete_message(call.message.chat.id, call.message.message_id)
     except Exception as e:
-        print(f"Download Error: {e}")
-        await context.bot.send_message(chat_id=query.message.chat_id, text=f"❌ Failed to download. The post might be private.\nError: {e}")
+        bot.send_message(call.message.chat.id, f"❌ Failed: {e}")
 
-if __name__ == '__main__':
-    from threading import Thread
-    from flask import Flask
+bot_data = {}
+@bot.message_handler(func=lambda m: True)
+def handle_link(message):
+    if "instagram.com" not in message.text:
+        if message.text.startswith("/"): return
+        bot.send_message(message.chat.id, "Please send a valid Instagram link.")
+        return
+    if not is_user_joined(message.from_user.id):
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK))
+        bot.send_message(message.chat.id, f"Please join {CHANNEL_USERNAME} first.", reply_markup=markup)
+        return
 
-    app_flask = Flask('')
-    @app_flask.route('/')
-    def home(): return "Bot is Alive!"
+    bot_data[message.from_user.id] = message.text.strip()
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("Low 360p", callback_data="q_360"),
+        types.InlineKeyboardButton("Med 480p", callback_data="q_480"),
+        types.InlineKeyboardButton("HD 720p", callback_data="q_720"),
+        types.InlineKeyboardButton("Full HD 1080p", callback_data="q_1080"),
+        types.InlineKeyboardButton("Best 4K/8K", callback_data="q_best"),
+    )
+    bot.send_message(message.chat.id, "👇 Select Quality:", reply_markup=markup)
 
-    def run_flask():
-        port = int(os.environ.get("PORT", 8080))
-        app_flask.run(host='0.0.0.0', port=port)
+# --- Webhook Routes ---
+@app.route('/')
+def home():
+    return "Bot is Alive! - Webhook Mode"
 
-    Thread(target=run_flask).start()
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    else:
+        return 'OK', 403
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
-    app.add_handler(CallbackQueryHandler(quality_download))
+if __name__ == "__main__":
+    bot.remove_webhook()
+    time.sleep(1)
+    # Render automatically provides RENDER_EXTERNAL_URL like https://your-app.onrender.com
+    if WEBHOOK_URL:
+        full_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        bot.set_webhook(url=full_url)
+        print(f"Webhook set to: {full_url}")
+    else:
+        print("RENDER_EXTERNAL_URL not found, set webhook manually")
 
-    # Auto delete every 3 minutes (180 seconds)
-    app.job_queue.run_repeating(auto_cleanup, interval=180, first=10)
-
-    print("Bot Started...")
-    app.run_polling()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
