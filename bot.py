@@ -21,17 +21,37 @@ def is_user_joined(user_id):
     except:
         return False
 
+def find_cookie_file():
+    # Render secret file kahi bhi ho sakta hai, isliye sab jagah check karenge
+    possible_paths = [
+        "cookies.txt",
+        "./cookies.txt",
+        "/etc/secrets/cookies.txt",
+        "/opt/render/project/src/cookies.txt",
+        os.path.join(os.getcwd(), "cookies.txt")
+    ]
+    for p in possible_paths:
+        if os.path.exists(p):
+            print(f"COOKIE FOUND AT: {p}")
+            return p
+    print("COOKIE NOT FOUND ANYWHERE")
+    return None
+
 def get_ydl_opts(quality):
+    cookie_path = find_cookie_file()
+
     opts = {
-        'quiet': True,
-        'no_warnings': True,
+        'quiet': False, # Logs me dikhega ab
+        'no_warnings': False,
         'outtmpl': '%(id)s.%(ext)s',
         'merge_output_format': 'mp4',
         'noplaylist': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
-    if os.path.exists("cookies.txt"):
-        opts['cookiefile'] = 'cookies.txt'
+    if cookie_path:
+        opts['cookiefile'] = cookie_path
 
+    # SABSE SAFE FORMAT - kabhi fail nahi hoga
     if quality == "yt_360":
         opts['format'] = "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
     elif quality == "yt_720":
@@ -41,31 +61,42 @@ def get_ydl_opts(quality):
     elif quality == "yt_mp3":
         opts['format'] = "bestaudio/best"
         opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]
-    else:
-        opts['format'] = "bv*+ba/b"
+    else: # Best ke liye ultimate fallback
+        opts['format'] = "bv*+ba/b/best"
 
     return opts
 
 def do_download(chat_id, url, quality, status_id):
     filename = None
     try:
-        with yt_dlp.YoutubeDL(get_ydl_opts(quality)) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            if quality == "yt_mp3":
-                base = os.path.splitext(filename)[0]
-                if os.path.exists(base + ".mp3"):
-                    filename = base + ".mp3"
-                else:
-                    # find any audio file
-                    for f in glob.glob(base + ".*"):
-                        if f.endswith(('.mp3','.m4a','.webm')):
-                            filename = f
-                            break
+        # Pehli baar try
+        try:
+            with yt_dlp.YoutubeDL(get_ydl_opts(quality)) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+        except Exception as first_err:
+            # Agar format error aaya to bina format ke BEST try karo
+            print(f"First attempt failed: {first_err}, retrying with BEST")
+            if "format" in str(first_err).lower():
+                with yt_dlp.YoutubeDL(get_ydl_opts("yt_best")) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    filename = ydl.prepare_filename(info)
+            else:
+                raise first_err
+
+        if quality == "yt_mp3":
+            base = os.path.splitext(filename)[0]
+            if os.path.exists(base + ".mp3"):
+                filename = base + ".mp3"
+            else:
+                for f in glob.glob(base + ".*"):
+                    if f.endswith(('.mp3','.m4a','.webm','.opus')):
+                        filename = f
+                        break
 
         caption = f"✅ Downloaded\nJoin {CHANNEL_USERNAME}"
         with open(filename, 'rb') as f:
-            if filename.endswith(('.mp3', '.m4a', '.webm')):
+            if filename.endswith(('.mp3', '.m4a', '.webm', '.opus')):
                 bot.send_audio(chat_id, f, caption=caption)
             else:
                 bot.send_video(chat_id, f, caption=caption, supports_streaming=True)
@@ -76,9 +107,9 @@ def do_download(chat_id, url, quality, status_id):
         except: pass
 
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"FINAL ERROR: {e}")
         try:
-            bot.edit_message_text(f"❌ Failed: {e}", chat_id, status_id)
+            bot.edit_message_text(f"❌ Failed: {e}\n\nLogs me COOKIE FOUND likha hai ya nahi check karo Render pe.", chat_id, status_id)
         except:
             bot.send_message(chat_id, f"❌ Failed: {e}")
 
